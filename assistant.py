@@ -1,10 +1,27 @@
+import os
+import io
+import re
+from typing import List, Tuple
+
 import streamlit as st
 from transformers import pipeline
 import PyPDF2
+import nltk
+
+@st.cache_resource
+def download_nltk():
+    nltk.download("punkt", quiet=True)
+
+download_nltk()
 
 with st.sidebar:
-    st.image("https://raw.githubusercontent.com/Runtimepirate/About_me/main/Profile_pic.jpg", width=200)
-    st.markdown("## **Mr. Aditya Katariya [[Resume](https://drive.google.com/file/d/1Vq9-H1dl5Kky2ugXPIbnPvJ72EEkTROY/view?usp=drive_link)]**")
+    st.image(
+        "https://raw.githubusercontent.com/Runtimepirate/About_me/main/Profile_pic.jpg",
+        width=200,
+    )
+    st.markdown(
+        "## **Mr. Aditya Katariya [[Resume](https://drive.google.com/file/d/1Vq9-H1dl5Kky2ugXPIbnPvJ72EEkTROY/view?usp=drive_link)]**"
+    )
     st.markdown(" *College - Noida Institute of Engineering and Technology, U.P*")
     st.markdown("----")
     st.markdown("## Contact Details:-")
@@ -14,29 +31,43 @@ with st.sidebar:
     st.markdown("----")
     st.markdown("**AI & ML Enthusiast**")
     st.markdown(
-        """
-        Passionate about solving real-world problems using data science and customer analytics. Always learning and building smart, scalable AI solutions.
-        """
+        "Passionate about solving real-world problems using data science and customer analytics. Always learning and building smart, scalable AI solutions."
     )
     st.markdown("----")
-    mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"])
+    mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"], key="mode")
 
+st.title("📚 Document‑Aware Assistant")
 
-st.title("Document-Aware Assistant")
+st.markdown(
+    """
+This assistant **reads your uploaded PDF or TXT document**, produces a *≤150‑word* summary, answers your questions with paragraph‑level justification, **generates logic‑based questions**, and evaluates your responses.
+"""
+)
 
-st.markdown("""
-This assistant reads your uploaded PDF or TXT document, summarizes it, answers your questions, and can quiz you with logic-based questions.
-""")
-
-@st.cache_resource
+@st.cache_resource(show_spinner=True)
 def load_models():
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    qa = pipeline("question-answering", model="deepset/roberta-base-squad2")
-    return summarizer, qa
+    """Load all required Hugging Face pipelines once and reuse."""
+    summarizer = pipeline(
+        "summarization",
+        model="facebook/bart-large-cnn",
+        device_map="auto",
+    )
+    qa = pipeline(
+        "question-answering",
+        model="deepset/roberta-base-squad2",
+        device_map="auto",
+    )
+    qg = pipeline(
+        "text2text-generation",
+        model="valhalla/t5-small-qg-hl",  
+        device_map="auto",
+        max_length=64,
+    )
+    return summarizer, qa, qg
 
-summarizer, qa = load_models()
+summarizer, qa_pipeline, qg_pipeline = load_models()
 
-def extract_text_from_pdf(uploaded_file):
+def extract_text_from_pdf(uploaded_file: io.BytesIO) -> str:
     reader = PyPDF2.PdfReader(uploaded_file)
     text = ""
     for page in reader.pages:
@@ -45,66 +76,158 @@ def extract_text_from_pdf(uploaded_file):
             text += page_text + "\n"
     return text
 
-def extract_text(uploaded_file):
-    if uploaded_file.name.endswith('.pdf'):
+def extract_text(uploaded_file) -> str:
+    if uploaded_file.name.lower().endswith(".pdf"):
         return extract_text_from_pdf(uploaded_file)
-    elif uploaded_file.name.endswith('.txt'):
-        return uploaded_file.read().decode('utf-8')
+    elif uploaded_file.name.lower().endswith(".txt"):
+        return uploaded_file.read().decode("utf-8", errors="ignore")
     return ""
 
-uploaded = st.file_uploader("Upload PDF or TXT Document", type=["pdf", "txt"])
+def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
+    """Split text into roughly max_tokens‑sized chunks using sentences."""
+    sentences = nltk.sent_tokenize(text)
+    chunks: List[str] = []
+    current: List[str] = []
+    token_count = 0
+
+    for sent in sentences:
+        num_tokens = len(sent.split())
+        if token_count + num_tokens > max_tokens and current:
+            chunks.append(" ".join(current))
+            current = []
+            token_count = 0
+        current.append(sent)
+        token_count += num_tokens
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+def get_best_answer(question: str, chunks: List[str]) -> Tuple[str, int, int, float, str]:
+    """Run QA over chunks, return best answer with its score and context chunk."""
+    best = {"score": -float("inf")}
+    for chunk in chunks:
+        try:
+            answer = qa_pipeline(question=question, context=chunk)
+            if answer["score"] > best["score"] and answer["answer"].strip():
+                best = {
+                    "answer": answer["answer"],
+                    "score": answer["score"],
+                    "start": answer["start"],
+                    "end": answer["end"],
+                    "context": chunk,
+                }
+        except Exception:
+            continue
+    if best["score"] == -float("inf"):
+        return "", 0, 0, 0.0, ""
+    return (
+        best["answer"],
+        best["start"],
+        best["end"],
+        best["score"],
+        best["context"],
+    )
+
+def highlight_answer(context: str, start: int, end: int) -> str:
+    """Return context with the answer wrapped in **bold** for display."""
+    return (
+        context[:start]
+        + " **"
+        + context[start:end]
+        + "** "
+        + context[end:]
+    )
+
+def generate_logic_questions(text: str, num_q: int = 3) -> List[str]:
+    """Generate num_q questions from the document using QG pipeline."""
+    sentences = nltk.sent_tokenize(text)
+    questions: List[str] = []
+    for sent in sentences:
+        if len(questions) >= num_q:
+            break
+        hl_text = f"<hl> {sent} <hl> "
+        try:
+            q = qg_pipeline(hl_text, do_sample=False, max_length=64)[0]["generated_text"]
+            q = q.strip().rstrip("?.!") + "?"
+            if q not in questions:
+                questions.append(q)
+        except Exception:
+            continue
+    default_q = [
+        "What is the main topic of the document?",
+        "Summarize the methodology described.",
+        "What are the key findings or conclusions?",
+    ]
+    while len(questions) < num_q:
+        questions.append(default_q[len(questions)])
+    return questions
+
+
+    
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+uploaded = st.file_uploader("Upload PDF or TXT Document", type=["pdf", "txt"], key="uploader")
 
 if uploaded:
     doc_text = extract_text(uploaded)
-    st.session_state["doc_text"] = doc_text
+    st.session_state["doc_text"] = doc_text  
 
-    st.subheader("Auto Summary (≤ 150 words)")
+    st.subheader("🔎 Auto Summary (≤ 150 words)")
     try:
-        summary = summarizer(doc_text[:4000], max_length=150, min_length=30, do_sample=False)[0]['summary_text']
-        st.markdown(f"*{summary}*")
+        summary = summarizer(
+            doc_text[:4096],
+            max_length=150,
+            min_length=30,
+            do_sample=False,
+        )[0]["summary_text"]
+        st.write(summary)
     except Exception as e:
         st.error(f"Summarization failed: {e}")
 
+    if "chunks" not in st.session_state:
+        st.session_state["chunks"] = chunk_text(doc_text)
+
     if mode == "Ask Anything":
-        st.subheader("Ask Anything")
-        question = st.text_input("Ask a question about the document:")
-        if st.button("Submit Question") and question:
-            try:
-                answer = qa(question=question, context=doc_text)
-                st.markdown(f"**Answer:** {answer['answer']}")
-                snippet = doc_text[max(0, answer['start']-50):answer['end']+50]
-                st.caption(f"Context: ...{snippet}...")
-            except Exception as e:
-                st.error(f"Question answering failed: {e}")
+        st.subheader("💬 Ask Anything")
+        question = st.text_input("Ask a question about the document:", key="user_question")
+        if st.button("Submit Question", key="submit_question") and question:
+            with st.spinner("Finding answer..."):
+                ans, start, end, score, context = get_best_answer(
+                    question, st.session_state["chunks"]
+                )
+            if ans:
+                st.markdown(f"**Answer:** {ans}")
+                justification = highlight_answer(context, start, end)
+                st.caption(f"Justification: …{justification[:300]}…")
+                st.caption(
+                    f"Confidence Score: {score:.3f}  |  Paragraph tokens: {len(context.split())}"
+                )
+            else:
+                st.warning("Sorry, I couldn't find an answer in the document.")
 
     elif mode == "Challenge Me":
-        st.subheader("Challenge Me")
-        st.info("Logic-based question generation is demoed below. For production, consider using a question generation model like T5.")
+        st.subheader("🎯 Challenge Me")
+        if "logic_questions" not in st.session_state:
+            st.session_state["logic_questions"] = generate_logic_questions(doc_text)
+            st.session_state["user_answers"] = ["" for _ in st.session_state["logic_questions"]]
 
-        sample_questions = [
-            "What is the main topic of the document?",
-            "Summarize the methodology described.",
-            "What are the key findings or conclusions?"
-        ]
-        user_answers = []
-        for i, q in enumerate(sample_questions):
-            ans = st.text_input(f"Q{i+1}: {q}", key=f"challenge_{i}")
-            user_answers.append((q, ans))
-        if st.button("Submit Answers"):
-            for i, (q, user_ans) in enumerate(user_answers):
-                if user_ans:
-                    try:
-                        answer = qa(question=q, context=doc_text)
-                        correct = answer['answer']
-                        st.markdown(f"**Q{i+1} Evaluation:**")
-                        st.markdown(f"- **Your Answer:** {user_ans}")
-                        st.markdown(f"- **Expected Answer:** {correct}")
-                        snippet = doc_text[max(0, answer['start']-50):answer['end']+50]
-                        st.caption(f"Justification: ...{snippet}...")
-                    except Exception as e:
-                        st.error(f"Evaluation failed: {e}")
+        for idx, q in enumerate(st.session_state["logic_questions"]):
+            st.text_input(f"Q{idx+1}: {q}", key=f"logic_q_{idx}")
+
+        if st.button("Submit Answers", key="submit_logic"):
+            st.markdown("----")
+            for idx, q in enumerate(st.session_state["logic_questions"]):
+                user_ans = st.session_state.get(f"logic_q_{idx}", "").strip()
+                correct, start, end, score, context = get_best_answer(
+                    q, st.session_state["chunks"]
+                )
+                st.markdown(f"**Q{idx+1} Evaluation:**")
+                st.write(f"*Your Answer*: {user_ans or '—'}")
+                st.write(f"*Expected Answer*: {correct or 'Not found in document'}")
+                if correct:
+                    justification = highlight_answer(context, start, end)
+                    st.caption(f"Justification: …{justification[:300]}…")
+                    st.caption(f"Confidence Score: {score:.3f}")
+                st.markdown("----")
 
 else:
     st.info("Please upload a PDF or TXT document to begin.")
-
-st.markdown("---")
