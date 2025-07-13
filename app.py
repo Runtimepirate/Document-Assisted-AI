@@ -7,10 +7,8 @@ import streamlit as st
 from transformers import pipeline
 import PyPDF2
 
-# Set environment variable to avoid tokenizer parallelism warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# -------------------- Sidebar -------------------- #
 with st.sidebar:
     st.image(
         "https://raw.githubusercontent.com/Runtimepirate/About_me/main/Profile_pic.jpg",
@@ -33,7 +31,6 @@ with st.sidebar:
     st.markdown("----")
     mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"], key="mode")
 
-# -------------------- Title & Description -------------------- #
 st.title("📚 Document‑Aware Assistant")
 
 st.markdown(
@@ -42,7 +39,6 @@ This assistant **reads your uploaded PDF or TXT document**, produces a *≤150�
 """
 )
 
-# -------------------- Model Loading -------------------- #
 @st.cache_resource(show_spinner=True)
 def load_models():
     summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
@@ -51,7 +47,6 @@ def load_models():
 
 summarizer, qa_pipeline = load_models()
 
-# -------------------- Helpers -------------------- #
 def extract_text_from_pdf(uploaded_file: io.BytesIO) -> str:
     reader = PyPDF2.PdfReader(uploaded_file)
     text = ""
@@ -69,7 +64,6 @@ def extract_text(uploaded_file) -> str:
     return ""
 
 def split_into_sentences(text: str) -> List[str]:
-    # Simple regex-based sentence splitter that preserves paragraph structure
     sentences = re.split(r'(?<=[.!?])\s+', text)
     return [s.replace("\n", " ").strip() for s in sentences if s.strip()]
 
@@ -91,7 +85,6 @@ def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
         chunks.append(" ".join(current))
     return chunks
 
-# -------------------- Main App Logic -------------------- #
 def summarize_large_document(text: str, chunk_size: int = 800, max_words: int = 150) -> str:
     paragraphs = chunk_text(text, max_tokens=chunk_size)
     partial_summaries = []
@@ -153,66 +146,63 @@ def generate_static_questions() -> List[str]:
         "What are the key findings or conclusions?",
     ]
 
-def main():
-    uploaded = st.file_uploader("Upload PDF or TXT Document", type=["pdf", "txt"], key="uploader")
+    
+uploaded = st.file_uploader("Upload PDF or TXT Document", type=["pdf", "txt"], key="uploader")
 
-    if uploaded:
-        doc_text = extract_text(uploaded)
-        st.session_state["doc_text"] = doc_text
+if uploaded:
+    doc_text = extract_text(uploaded)
+    st.session_state["doc_text"] = doc_text
 
-        st.subheader("🔎 Auto Summary (≤ 150 words)")
-        try:
-            summary = summarize_large_document(doc_text)
-            st.write(summary)
-        except Exception as e:
-            st.error(f"Summarization failed: {e}")
+    st.subheader("🔎 Auto Summary (≤ 150 words)")
+    try:
+        summary = summarize_large_document(doc_text)
+        st.write(summary)
+    except Exception as e:
+        st.error(f"Summarization failed: {e}")
 
-        if "chunks" not in st.session_state:
-            st.session_state["chunks"] = chunk_text(doc_text)
+    if "chunks" not in st.session_state:
+        st.session_state["chunks"] = chunk_text(doc_text)
 
-        if mode == "Ask Anything":
-            st.subheader("💬 Ask Anything")
-            question = st.text_input("Ask a question about the document:", key="user_question")
-            if st.button("Submit Question", key="submit_question") and question:
-                with st.spinner("Finding answer..."):
-                    ans, start, end, score, context = get_best_answer(
-                        question, st.session_state["chunks"]
-                    )
-                if ans:
-                    st.markdown(f"**Answer:** {ans}")
+    if mode == "Ask Anything":
+        st.subheader("💬 Ask Anything")
+        question = st.text_input("Ask a question about the document:", key="user_question")
+        if st.button("Submit Question", key="submit_question") and question:
+            with st.spinner("Finding answer..."):
+                ans, start, end, score, context = get_best_answer(
+                    question, st.session_state["chunks"]
+                )
+            if ans:
+                st.markdown(f"**Answer:** {ans}")
+                justification = highlight_answer(context, start, end)
+                st.caption(f"Justification: …{justification[:300]}…")
+                st.caption(f"Confidence Score: {score:.3f}  |  Paragraph tokens: {len(context.split())}")
+            else:
+                st.warning("Sorry, I couldn't find an answer in the document.")
+
+    elif mode == "Challenge Me":
+        st.subheader("🎯 Challenge Me")
+        if "logic_questions" not in st.session_state:
+            st.session_state["logic_questions"] = generate_static_questions()
+            st.session_state["user_answers"] = ["" for _ in st.session_state["logic_questions"]]
+
+        for idx, q in enumerate(st.session_state["logic_questions"]):
+            st.text_input(f"Q{idx+1}: {q}", key=f"logic_q_{idx}")
+
+        if st.button("Submit Answers", key="submit_logic"):
+            st.markdown("----")
+            for idx, q in enumerate(st.session_state["logic_questions"]):
+                user_ans = st.session_state.get(f"logic_q_{idx}", "").strip()
+                correct, start, end, score, context = get_best_answer(
+                    q, st.session_state["chunks"]
+                )
+                st.markdown(f"**Q{idx+1} Evaluation:**")
+                st.write(f"*Your Answer*: {user_ans or '—'}")
+                st.write(f"*Expected Answer*: {correct or 'Not found in document'}")
+                if correct:
                     justification = highlight_answer(context, start, end)
                     st.caption(f"Justification: …{justification[:300]}…")
-                    st.caption(f"Confidence Score: {score:.3f}  |  Paragraph tokens: {len(context.split())}")
-                else:
-                    st.warning("Sorry, I couldn't find an answer in the document.")
-
-        elif mode == "Challenge Me":
-            st.subheader("🎯 Challenge Me")
-            if "logic_questions" not in st.session_state:
-                st.session_state["logic_questions"] = generate_static_questions()
-                st.session_state["user_answers"] = ["" for _ in st.session_state["logic_questions"]]
-
-            for idx, q in enumerate(st.session_state["logic_questions"]):
-                st.text_input(f"Q{idx+1}: {q}", key=f"logic_q_{idx}")
-
-            if st.button("Submit Answers", key="submit_logic"):
+                    st.caption(f"Confidence Score: {score:.3f}")
                 st.markdown("----")
-                for idx, q in enumerate(st.session_state["logic_questions"]):
-                    user_ans = st.session_state.get(f"logic_q_{idx}", "").strip()
-                    correct, start, end, score, context = get_best_answer(
-                        q, st.session_state["chunks"]
-                    )
-                    st.markdown(f"**Q{idx+1} Evaluation:**")
-                    st.write(f"*Your Answer*: {user_ans or '—'}")
-                    st.write(f"*Expected Answer*: {correct or 'Not found in document'}")
-                    if correct:
-                        justification = highlight_answer(context, start, end)
-                        st.caption(f"Justification: …{justification[:300]}…")
-                        st.caption(f"Confidence Score: {score:.3f}")
-                    st.markdown("----")
 
-    else:
-        st.info("Please upload a PDF or TXT document to begin.")
-
-if __name__ == "__main__":
-    main()
+else:
+    st.info("Please upload a PDF or TXT document to begin.")
