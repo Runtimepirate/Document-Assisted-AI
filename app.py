@@ -9,7 +9,7 @@ import nltk
 
 @st.cache_resource
 def download_nltk():
-    nltk.download("punkt", quiet=True)
+    nltk.data.path.append("nltk_data")
 
 download_nltk()
 
