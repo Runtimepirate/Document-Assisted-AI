@@ -1,6 +1,5 @@
 import os
 import io
-import re
 from typing import List, Tuple
 
 import streamlit as st
@@ -13,6 +12,8 @@ def download_nltk():
     nltk.download("punkt", quiet=True)
 
 download_nltk()
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 with st.sidebar:
     st.image(
@@ -46,26 +47,11 @@ This assistant **reads your uploaded PDF or TXT document**, produces a *≤150�
 
 @st.cache_resource(show_spinner=True)
 def load_models():
-    """Load all required Hugging Face pipelines once and reuse."""
-    summarizer = pipeline(
-        "summarization",
-        model="facebook/bart-large-cnn",
-        device_map="auto",
-    )
-    qa = pipeline(
-        "question-answering",
-        model="deepset/roberta-base-squad2",
-        device_map="auto",
-    )
-    qg = pipeline(
-        "text2text-generation",
-        model="valhalla/t5-small-qg-hl",  
-        device_map="auto",
-        max_length=64,
-    )
-    return summarizer, qa, qg
+    summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+    qa = pipeline("question-answering", model="deepset/minilm-uncased-squad2")
+    return summarizer, qa
 
-summarizer, qa_pipeline, qg_pipeline = load_models()
+summarizer, qa_pipeline = load_models()
 
 def extract_text_from_pdf(uploaded_file: io.BytesIO) -> str:
     reader = PyPDF2.PdfReader(uploaded_file)
@@ -84,7 +70,6 @@ def extract_text(uploaded_file) -> str:
     return ""
 
 def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
-    """Split text into roughly max_tokens‑sized chunks using sentences."""
     sentences = nltk.sent_tokenize(text)
     chunks: List[str] = []
     current: List[str] = []
@@ -103,7 +88,6 @@ def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
     return chunks
 
 def get_best_answer(question: str, chunks: List[str]) -> Tuple[str, int, int, float, str]:
-    """Run QA over chunks, return best answer with its score and context chunk."""
     best = {"score": -float("inf")}
     for chunk in chunks:
         try:
@@ -129,55 +113,26 @@ def get_best_answer(question: str, chunks: List[str]) -> Tuple[str, int, int, fl
     )
 
 def highlight_answer(context: str, start: int, end: int) -> str:
-    """Return context with the answer wrapped in **bold** for display."""
-    return (
-        context[:start]
-        + " **"
-        + context[start:end]
-        + "** "
-        + context[end:]
-    )
+    return context[:start] + " **" + context[start:end] + "** " + context[end:]
 
-def generate_logic_questions(text: str, num_q: int = 3) -> List[str]:
-    """Generate num_q questions from the document using QG pipeline."""
-    sentences = nltk.sent_tokenize(text)
-    questions: List[str] = []
-    for sent in sentences:
-        if len(questions) >= num_q:
-            break
-        hl_text = f"<hl> {sent} <hl> "
-        try:
-            q = qg_pipeline(hl_text, do_sample=False, max_length=64)[0]["generated_text"]
-            q = q.strip().rstrip("?.!") + "?"
-            if q not in questions:
-                questions.append(q)
-        except Exception:
-            continue
-    default_q = [
+def generate_static_questions() -> List[str]:
+    return [
         "What is the main topic of the document?",
         "Summarize the methodology described.",
         "What are the key findings or conclusions?",
     ]
-    while len(questions) < num_q:
-        questions.append(default_q[len(questions)])
-    return questions
 
 
-    
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 uploaded = st.file_uploader("Upload PDF or TXT Document", type=["pdf", "txt"], key="uploader")
 
 if uploaded:
     doc_text = extract_text(uploaded)
-    st.session_state["doc_text"] = doc_text  
+    st.session_state["doc_text"] = doc_text
 
     st.subheader("🔎 Auto Summary (≤ 150 words)")
     try:
         summary = summarizer(
-            doc_text[:4096],
-            max_length=150,
-            min_length=30,
-            do_sample=False,
+            doc_text[:4096], max_length=150, min_length=30, do_sample=False
         )[0]["summary_text"]
         st.write(summary)
     except Exception as e:
@@ -198,16 +153,14 @@ if uploaded:
                 st.markdown(f"**Answer:** {ans}")
                 justification = highlight_answer(context, start, end)
                 st.caption(f"Justification: …{justification[:300]}…")
-                st.caption(
-                    f"Confidence Score: {score:.3f}  |  Paragraph tokens: {len(context.split())}"
-                )
+                st.caption(f"Confidence Score: {score:.3f}  |  Paragraph tokens: {len(context.split())}")
             else:
                 st.warning("Sorry, I couldn't find an answer in the document.")
 
     elif mode == "Challenge Me":
         st.subheader("🎯 Challenge Me")
         if "logic_questions" not in st.session_state:
-            st.session_state["logic_questions"] = generate_logic_questions(doc_text)
+            st.session_state["logic_questions"] = generate_static_questions()
             st.session_state["user_answers"] = ["" for _ in st.session_state["logic_questions"]]
 
         for idx, q in enumerate(st.session_state["logic_questions"]):
