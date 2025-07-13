@@ -1,5 +1,5 @@
-streamlit
-transformers
-torch
-PyPDF2
-nltk
+streamlit>=1.24
+transformers>=4.41
+torch>=2.1
+PyPDF2>=3.0
+nltk>=3.8
