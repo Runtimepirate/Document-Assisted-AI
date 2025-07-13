@@ -1,23 +1,11 @@
 import os
 import io
+import re
 from typing import List, Tuple
 
 import streamlit as st
 from transformers import pipeline
 import PyPDF2
-import nltk
-import nltk.data
-
-# Force-download NLTK punkt to a safe Streamlit Cloud location
-@st.cache_resource
-def download_nltk():
-    nltk_data_path = "/tmp/nltk_data"
-    if not os.path.exists(nltk_data_path):
-        os.makedirs(nltk_data_path)
-    nltk.data.path.append(nltk_data_path)
-    nltk.download("punkt", download_dir=nltk_data_path, quiet=True)
-
-download_nltk()
 
 # Set environment variable to avoid tokenizer parallelism warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -80,8 +68,12 @@ def extract_text(uploaded_file) -> str:
         return uploaded_file.read().decode("utf-8", errors="ignore")
     return ""
 
+def split_into_sentences(text: str) -> List[str]:
+    # Simple regex-based sentence splitter
+    return re.split(r'(?<=[.!?])\s+', text)
+
 def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
-    sentences = nltk.sent_tokenize(text)
+    sentences = split_into_sentences(text)
     chunks: List[str] = []
     current: List[str] = []
     token_count = 0
