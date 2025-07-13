@@ -31,7 +31,7 @@ with st.sidebar:
     st.markdown("----")
     mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"], key="mode")
 
-st.title("📚 Document‑Aware Assistant")
+st.title("Document‑Aware Assistant")
 
 st.markdown(
     """
