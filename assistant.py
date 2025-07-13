@@ -22,7 +22,7 @@ with st.sidebar:
     mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"])
 
 
-st.title("Document-Aware GenAI Assistant")
+st.title("Document-Aware Assistant")
 
 st.markdown("""
 This assistant reads your uploaded PDF or TXT document, summarizes it, answers your questions, and can quiz you with logic-based questions.
