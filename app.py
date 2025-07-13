@@ -37,7 +37,7 @@ with st.sidebar:
     st.markdown("----")
     mode = st.radio("Choose Mode:", ["Ask Anything", "Challenge Me"], key="mode")
 
-st.title("📚 Document‑Aware Assistant")
+st.title("Document‑Aware Assistant")
 
 st.markdown(
     """
@@ -87,6 +87,32 @@ def chunk_text(text: str, max_tokens: int = 450) -> List[str]:
         chunks.append(" ".join(current))
     return chunks
 
+def summarize_large_document(text: str, chunk_size: int = 800, max_words: int = 150) -> str:
+    paragraphs = chunk_text(text, max_tokens=chunk_size)
+    partial_summaries = []
+    for para in paragraphs:
+        try:
+            summary = summarizer(
+                para,
+                max_length=80,
+                min_length=20,
+                do_sample=False
+            )[0]['summary_text']
+            partial_summaries.append(summary)
+        except Exception:
+            continue
+    combined = " ".join(partial_summaries)
+    try:
+        final_summary = summarizer(
+            combined[:4000],
+            max_length=max_words,
+            min_length=40,
+            do_sample=False
+        )[0]['summary_text']
+        return final_summary
+    except Exception:
+        return combined[:max_words * 5]
+
 def get_best_answer(question: str, chunks: List[str]) -> Tuple[str, int, int, float, str]:
     best = {"score": -float("inf")}
     for chunk in chunks:
@@ -131,9 +157,7 @@ if uploaded:
 
     st.subheader("🔎 Auto Summary (≤ 150 words)")
     try:
-        summary = summarizer(
-            doc_text[:4096], max_length=150, min_length=30, do_sample=False
-        )[0]["summary_text"]
+        summary = summarize_large_document(doc_text)
         st.write(summary)
     except Exception as e:
         st.error(f"Summarization failed: {e}")
