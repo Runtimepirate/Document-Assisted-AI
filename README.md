@@ -5,8 +5,9 @@ Welcome to the **Document-Aware Assistant** — an AI tool that can:
 - **Answer your questions** using contextual reasoning from the document,
 - **Challenge you** with logic-based questions and evaluate your answers.
 
->  Hosted on **[Streamlit Cloud]([adityakatariyaez.streamlit.app](https://adityakatariyaez.streamlit.app/))**  
->  Built with Transformers | Streamlit | PyPDF2  
+## Hosted on
+- **[Streamlit Cloud]([adityakatariyaez.streamlit.app](https://adityakatariyaez.streamlit.app/))**  
+- Built with Transformers | Streamlit | PyPDF2  
 
 ---
 
